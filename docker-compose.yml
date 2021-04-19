@@ -1,0 +1,92 @@
+version: '3.6'
+
+volumes:
+  influx_data:
+    external: true
+  grafana_data:
+    external: true
+    
+services:  
+  sensor:
+    build: ./sensor
+    restart: unless-stopped
+    # Access to the Raspberry Pi system. I2C for the connection to the pHat pins for the sensors. GPIO for the shutdown buttons. Normal device functions don't seem to be working
+    privileged: true
+    depends_on:
+      - influxdb
+    # 1. Join the internal network so Sensor can upload data to the database
+    env_file: database.env
+    networks:
+      internal:
+        ipv4_address: 175.40.9.3
+
+  influxdb:
+    restart: unless-stopped
+    image: influxdb:2.0.4
+    # Attach influxdb only to the private network
+    networks:
+      internal:
+        ipv4_address: 175.40.9.2
+      priv_lan:
+        ipv4_address: 192.168.1.191
+    volumes:
+      - influx_data:/var/lib/influxdb2
+      - influx_data:/etc/influxdb2
+    ports:
+      - 8086
+      - 8088
+
+  grafana:
+    build: ./grafana
+    restart: unless-stopped
+    image: grafana/grafana:7.5.4
+    depends_on:
+      - influxdb
+    ports:
+      - 3000
+    volumes:
+      - 'grafana_data:/var/lib/grafana'
+    environment:
+      - 'GF_INSTALL_PLUGINS=grafana-clock-panel'
+    networks:
+      internal:
+        ipv4_address: 175.40.9.4
+      priv_lan:
+        ipv4_address: 192.168.1.190
+
+  telegraf:
+    env_file: database.env
+    image: telegraf
+    depends_on:
+      - influxdb
+    ports:
+      - 8125
+      - 8092:8092/udp
+      - 8094
+    environment:
+      HOST_PROC: /rootfs/proc
+      HOST_SYS: /rootfs/sys
+      HOST_ETC: /rootfs/etc
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/rootfs/sys:ro
+      - /proc:/rootfs/proc:ro
+      - /etc:/rootfs/etc:ro
+    networks:
+      internal:
+        ipv4_address: 175.40.9.5    
+
+
+networks:
+  # Create the internal network
+  internal:
+    ipam:
+      config:
+        - subnet: 175.40.9.0/29
+
+  # The priv_lan network is already setup, so it is an 'external' network
+  priv_lan:
+    external:
+      name: priv_lan
+
